@@ -13,6 +13,9 @@ void go()
     __asm__ volatile ("nop");
     WDOG->STCTRLH = 0x10;
 
+    // Allow all the wierd modes (including HSRUN)...
+    SMC->PMPROT = 0xaa;
+
     // Enable GPIOs on port C...
     SIM->CGC5 |= 0x800;
 
@@ -39,8 +42,8 @@ void go()
     // Wait for IREF to switch.
     while (MCG->S & 0x10);
 
-    // Now configure the PLL for 144 Mhz = 8 x 18.  So /2 and *18.
-    MCG->C6 = 2;                        // *18.
+    // Now configure the PLL for 168 Mhz = 8 x 21.  So /2 and *21.
+    MCG->C6 = 5;                        // *21.
     MCG->C5 = 0x61;                     // Enable, Stop-en, /2
 
     // Wait for lock...
@@ -54,8 +57,14 @@ void go()
     // Wait for PLLS to take effect...
     while (~MCG->S & 0x20);
 
-    // The flash clock has a max. of 28MHz.  Set it to /6 (will give 24MHz).
-    SIM->CLKDIV1 = (SIM->CLKDIV1 & ~0xf0000) | 0x50000;
+    // The flash clock has a max. of 28MHz.  Set it to /6.
+    // The bus clock has a max. of 60MHz, set it to /3.  Ditto flexbus even
+    // though we're not using it.
+    SIM->CLKDIV1 = 0x2250000;
+
+    // Enter HSRUN...
+    SMC->PMCTRL = 0x60;
+    while (SMC->PMSTAT != 0x80);
 
     // Now switch CLKS to the PLL...
     MCG->C1 = MCG->C1 & ~0xc0;

@@ -38,6 +38,15 @@ typedef struct OSC_t {
 
 #define OSC ((volatile OSC_t *) 0x40065000)
 
+typedef struct SMC_t {
+    uint8_t PMPROT;
+    uint8_t PMCTRL;
+    uint8_t STOPCTRL;
+    uint8_t PMSTAT;
+} SMC_t;
+
+#define SMC ((volatile SMC_t *) 0x4007e000)
+
 typedef struct SIM_t {
     uint32_t OPT1;
     uint32_t OPT1CFG;
