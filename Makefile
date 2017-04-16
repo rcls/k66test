@@ -36,3 +36,7 @@ blink.elf: blink.ld blink.o
 # Cancel...
 %: %.c
 %: %.o
+
+.PHONY: blinkp
+blinkp: blink.hex
+	sudo /home/mirror/teensy_loader_cli/teensy_loader_cli --mcu mk66fx1m0 -w blink.hex
