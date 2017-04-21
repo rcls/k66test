@@ -3,6 +3,12 @@
 
 #include <stdint.h>
 
+typedef unsigned char __attribute__((aligned(4))) reg8_t;
+typedef union reg8_u {
+    unsigned char b;
+    uint32_t u32;
+} reg8_u;
+
 typedef struct MCG_t {
     uint8_t C1;
     uint8_t C2;
@@ -45,8 +51,6 @@ typedef struct SMC_t {
     uint8_t PMSTAT;
 } SMC_t;
 
-#define SMC ((volatile SMC_t *) 0x4007e000)
-
 typedef struct SIM_t {
     uint32_t OPT1;
     uint32_t OPT1CFG;
@@ -82,11 +86,6 @@ typedef struct SIM_t {
 } SIM_t;
 _Static_assert(sizeof(SIM_t) == 0x106c, "SIM_t size");
 
-#define SIM ((volatile SIM_t *) 0x40047000)
-
-#define SIM_SCGC5 (*(volatile uint32_t *) 0x40048038)
-#define PORTC_PCR5 (*(volatile uint32_t *) 0x4004B014)
-
 typedef struct PORT_t {
     uint32_t CR[32];
     uint32_t GPCLR;                      // "Control Low Register"
@@ -109,19 +108,6 @@ typedef struct GPIO_t {
     uint32_t dummy[10];
 } GPIO_t;
 
-#define GPIOA ((volatile GPIO_t *) 0x400ff000)
-#define GPIOB ((volatile GPIO_t *) 0x400ff040)
-#define GPIOC ((volatile GPIO_t *) 0x400ff080)
-#define GPIOD ((volatile GPIO_t *) 0x400ff0c0)
-#define GPIOE ((volatile GPIO_t *) 0x400ff100)
-
-
-#define GPIOC_PDDR (*(volatile uint32_t *) 0x400FF094)
-#define GPIOC_PTOR (*(volatile uint32_t *) 0x400FF08C)
-
-#define WDOG_UNLOCK (*(volatile uint16_t *) 0x4005200E)
-#define WDOG_REFRESH (*(volatile uint16_t *) 0x4005200C)
-#define WDOG_STCTRLH (*(volatile uint16_t *) 0x40052000)
 
 typedef struct WDOG_t {
     uint16_t STCTRLH;
@@ -138,6 +124,85 @@ typedef struct WDOG_t {
     uint16_t PRESC;
 } WDOG_t;
 
-#define WDOG ((volatile WDOG_t *) 0x40052000)
+
+typedef struct USBFS_t {
+    const reg8_t PERID;
+    const reg8_t IDCOMP;
+    const reg8_t REV;
+    const reg8_t ADDINFO;
+    reg8_t OTGISTAT;
+    reg8_t OTGICR;
+    reg8_t OTGSTAT;
+    reg8_t OTGCTL;
+
+    uint32_t dummy8[24];
+
+    reg8_t ISTAT;
+    reg8_t INTEN;
+    reg8_t ERRSTAT;
+    reg8_t ERREN;
+    const reg8_t STAT;
+    reg8_t CTL;
+    reg8_t ADDR;
+    reg8_t BDTPAGE1;
+    reg8_t FRMNUML;
+    reg8_t FRMNUMH;
+    reg8_t TOKEN;
+    reg8_t SOFTHLD;
+    reg8_t BDTPAGE2;
+    reg8_t BDTPAGE3;
+
+    uint32_t dummy[2];
+
+    reg8_u ENDPT[16];
+
+    reg8_t USBCTRL;
+    const reg8_t OBSERVE;
+    reg8_t CONTROL;
+    reg8_t USBTRC0;
+    reg8_t USBFRMADJUST;
+/*
+4007_2140 USB Clock recovery control (USB0_CLK_RECOVER_CTRL) 8 R/W 00h 51.5.29/
+4007_2144 IRC48M oscillator enable register (USB0_CLK_RECOVER_IRC_EN) 8 R/W 01h 51.5.30/
+4007_2154 Clock recovery combined interrupt enable (USB0_CLK_RECOVER_INT_EN) 8 R/W 10h 51.5.31/
+4007_215C Clock recovery separated interrupt status (USB0_CLK_RECOVER_INT_STATUS)
+*/
+} USBFS_t;
+
+typedef struct BDT_item_t {
+    uint32_t flags;
+    void * address;
+} BDT_item_t;
+
+typedef struct BDT_ep_t {
+    BDT_item_t rx[2];
+    BDT_item_t tx[2];
+} BDT_ep_t;
+
+#define PORTC_PCR ((volatile uint32_t *) 0x4004B000)
+
+#define WDOG  ((volatile WDOG_t *) 0x40052000)
+
+#define SIM   ((volatile SIM_t *) 0x40047000)
+#define USB0  ((volatile USBFS_t *) 0x40072000)
+#define SMC   ((volatile SMC_t *) 0x4007e000)
+
+#define GPIOA ((volatile GPIO_t *) 0x400ff000)
+#define GPIOB ((volatile GPIO_t *) 0x400ff040)
+#define GPIOC ((volatile GPIO_t *) 0x400ff080)
+#define GPIOD ((volatile GPIO_t *) 0x400ff0c0)
+#define GPIOE ((volatile GPIO_t *) 0x400ff100)
+
+_Static_assert((unsigned) PORTC_PCR == 0x4004b000, "PORTC pcr");
+_Static_assert((unsigned) &PORTC_PCR[5] == 0x4004b014, "PORTC pcr5");
+
+_Static_assert((unsigned) &USB0->ISTAT == 0x40072080, "USB0 istat");
+_Static_assert((unsigned) &USB0->ENDPT[0] == 0x400720c0, "USB0 ep0");
+_Static_assert((unsigned) &USB0->USBCTRL == 0x40072100, "USB0 usbctrl");
+
+_Static_assert((unsigned) &SIM->OPT2 == 0x40048004, "SIM opt2");
+_Static_assert((unsigned) &SIM->CLKDIV2 == 0x40048048, "SIM clkdiv");
+_Static_assert((unsigned) &SIM->CGC4 == 0x40048034, "SIM cgc4");
+
 
 #endif
