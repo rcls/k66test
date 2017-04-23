@@ -1,6 +1,7 @@
 
 #include "k66.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -101,9 +102,22 @@ static const uint8_t config_descriptor[] = {
 _Static_assert (CONFIG_DESCRIPTOR_SIZE == sizeof (config_descriptor),
                 "config_descriptor size");
 
+static void hang(void)
+{
+    while (1) {
+        GPIOC->SET = 1 << 5;
+        for (int i = 0; i < (1 << 22); ++i)
+            asm volatile("");
+        GPIOC->CLR = 1 << 5;
+        for (int i = 0; i < (1 << 24); ++i)
+            asm volatile("");
+    }
+}
 
+static bool set_address;
+static uint8_t address;
 
-void go()
+void go(void)
 {
     asm volatile ("cpsid i\n" ::: "memory");
 
@@ -181,6 +195,12 @@ void go()
     // And wait for it to take effect.
     while ((MCG->S & 0xc) != 0xc);
 
+    // Just turn off the MPU for now...
+    MPU->CESR &= ~1;
+
+    // Enable USB access to flash.
+    FMC->PFAPR = 0xffff;
+
     // ptc5 default disabled, alt1 = PTC5/LLWU_P9
     PORTC_PCR[5] = 0x100;
 
@@ -201,20 +221,22 @@ void go()
     USB0->BDTPAGE2 = b >> 16;
     USB0->BDTPAGE3 = b >> 24;
 
+    USB0->ADDR = 0;
+
     // Set up endpoint zero rx...
     // Disable DTS on these, that way the same BDT can process the SETUP token
     // and the OUT token used for a control ACK.
-    static volatile uint32_t setup[2];
+    static volatile uint32_t setup[16];
     bdt[0].rx[0].address = (void *) &setup;
-    bdt[0].rx[0].flags = 0x80088;          // 8 bytes, USBFS own, DTS.
+    bdt[0].rx[0].flags = 0x400088;          // 8 bytes, USBFS own, DTS.
     bdt[0].rx[1].address = (void *) &setup;
-    bdt[0].rx[1].flags = 0x80088;          // 8 bytes, USBFS own, DTS.
+    bdt[0].rx[1].flags = 0x400088;          // 8 bytes, USBFS own, DTS.
 
     // Let's setup tx also...
     bdt[0].tx[0].address = (void *) &setup;
-    bdt[0].tx[0].flags = 0x80088;          // 8 bytes, USBFS own, DTS.
+    bdt[0].tx[0].flags = 0;             // 8 bytes, USBFS own, DTS.
     bdt[0].tx[1].address = (void *) &setup;
-    bdt[0].tx[1].flags = 0x80088;          // 8 bytes, USBFS own, DTS.
+    bdt[0].tx[1].flags = 0;             // 8 bytes, USBFS own, DTS.
 
     // DP pullup...
     USB0->OTGCTL = 0x82;                // DPHIGH + OTGEN (automatic).
@@ -235,35 +257,40 @@ void go()
     USB0->CTL = 3;                      // Reset odd/even.
     USB0->CTL = 1;                      // Enable...
 
-    int next_tx = 0;
-    // int toggle = 0;
+    bool next_tx = 0;
 
     while (1) {
         // Just in case it stalls...
         //USB0->ENDPT[0].b = 0x0d;              // Endpoint is control.
 
-        GPIOC->OUT = (USB0->FRMNUMH & 1) ? 1 << 5 : 0;
+        //GPIOC->OUT = (USB0->FRMNUMH & 1) ? 1 << 5 : 0;
         /* if (++toggle == 1048576) { */
         /*     toggle = 0; */
         /*     GPIOC->TOGGLE = 1 << 5; */
         /* } */
         int istat = USB0->ISTAT;
         if (istat & 1) {
-            USB0->ISTAT = 1;
             bdt[0].rx[0].address = (void *) &setup;
-            bdt[0].rx[0].flags = 0x80088;          // 8 bytes, USBFS own, DTS.
+            bdt[0].rx[0].flags = 0x400088;          // 8 bytes, USBFS own, DTS.
             bdt[0].rx[1].address = (void *) &setup;
-            bdt[0].rx[1].flags = 0x80088;          // 8 bytes, USBFS own, DTS.
+            bdt[0].rx[1].flags = 0x4000c8;          // 8 bytes, USBFS own, DTS.
+
             USB0->ENDPT[0].b = 0x0d;              // Endpoint is control.
+            USB0->ADDR = 0;
+            USB0->CTL = 3;                      // Reset odd/even.
             USB0->CTL = 1;                      // Enable...
+            USB0->ISTAT = istat;
+            next_tx = 0;
+            continue;
         }
 
         if (istat & 4) {
             USB0->ISTAT = 4;
-            /* if (++toggle == 100) { */
-            /*     toggle = 0; */
-            /*     GPIOC->TOGGLE = 1 << 5; */
-            /* } */
+            static int toggle;
+            if (++toggle == 100) {
+                toggle = 0;
+                //GPIOC->TOGGLE = 1 << 5;
+            }
         }
 
         if ((istat & 8) == 0)
@@ -272,7 +299,15 @@ void go()
         int done = USB0->STAT;
         USB0->ISTAT = 8;
 
-        GPIOC->SET = 1 << 5;
+        // If it's ep 0 TX, update the next_tx flag...
+        if ((done & ~4) == 8) {
+            // GPIOC->SET = 1 << 5;
+            next_tx = !(done & 4);
+            if (set_address)
+                USB0->ADDR = address;
+            set_address = false;
+            continue;
+        }
 
         // If it's not ep 0 RX, don't care...
         if ((done & ~4) != 0)
@@ -283,18 +318,17 @@ void go()
 
         // Resume the BDT...
         unsigned flags = STAT_TO_BDT(done)->flags;
-        STAT_TO_BDT(done)->flags = 0x80080;
-
-        // Resume the EP, it pauses on setup.
-        USB0->CTL &= ~0x20;
+        STAT_TO_BDT(done)->flags = 0x4000c8;
+        STAT_TO_BDT(done ^ 4)->flags = 0x400088;
 
         // If it's not a setup, ignore it.
-        if ((flags & 0x3c) != 0xd * 4)
+        if ((flags & 0x3c) != 0xd * 4) {
+            hang();
             continue;
+        }
 
         const void * response_data = NULL;
-        int response_length = 0;
-        // int response_length = -1; Don't stall for now.
+        int response_length = -1;
 
         switch (setup0 & 0xffff) {
         case 0x0680:                    // Get descriptor.
@@ -318,7 +352,10 @@ void go()
             }
             break;
         case 0x0500:                        // Set address.
-            USB0->ADDR = (setup0 >> 16) & 255;
+            // GPIOC->SET = 1 << 5;
+            //USB0->ADDR = (setup0 >> 16) & 255;
+            address = (setup0 >> 16) & 255;
+            set_address = true;
             response_length = 0;
             break;
 
@@ -332,7 +369,7 @@ void go()
         }
 
         // Don't stall for now...
-        if (setup0 & 0x80) {
+        if (response_length >= 0) {
         //if (response_data) {
             // This is a data1...
             if ((setup1 >> 16) < response_length)
@@ -340,30 +377,15 @@ void go()
 
             bdt[0].tx[next_tx].address = (void *) response_data;
             bdt[0].tx[next_tx].flags = (response_length << 16) + 0xc8;
-            next_tx = !next_tx;
+            // next_tx = !next_tx;
         }
-        else if (response_length < 0) {
+        else {
+            hang();
         }
+
+        // Resume the EP, it pauses on setup.
+        USB0->CTL &= ~0x20;
     }
-#if 1
-    while (1) {
-        GPIOC->SET = 1 << 5;
-        for (int i = 0; i < (1 << 22); ++i)
-            asm volatile("");
-        GPIOC->CLR = 1 << 5;
-        for (int i = 0; i < (1 << 24); ++i)
-            asm volatile("");
-    }
-#else
-    uint32_t z;
-    while (1) {
-        z += 2048;
-        if (z > (z << 10))
-            GPIOC->SET = 1 << 5;
-        else
-            GPIOC->CLR = 1 << 5;
-    }
-#endif
 }
 
 void * start[256] __attribute__ ((section (".start"), externally_visible));

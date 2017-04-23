@@ -32,8 +32,6 @@ typedef struct MCG_t {
     uint8_t T3;
 } MCG_t;
 
-#define MCG ((volatile MCG_t *) 0x40064000)
-
 // The MCG's C2 register bits configure the oscillator frequency range. See the
 // OSC and MCG chapters for more details.
 typedef struct OSC_t {
@@ -41,8 +39,6 @@ typedef struct OSC_t {
     uint8_t dummy1;
     uint8_t DIV;
 } OSC_t;
-
-#define OSC ((volatile OSC_t *) 0x40065000)
 
 typedef struct SMC_t {
     uint8_t PMPROT;
@@ -86,6 +82,18 @@ typedef struct SIM_t {
 } SIM_t;
 _Static_assert(sizeof(SIM_t) == 0x106c, "SIM_t size");
 
+typedef struct FMC_t {
+    uint32_t PFAPR;
+    uint32_t PFB01CR;
+    uint32_t PFB23CR;
+    uint32_t dummy[63];
+
+    uint32_t TAG[4][4];
+    uint32_t dummy2[48];
+
+    uint32_t DATA[4][4][4];
+} FMC_t;
+
 typedef struct PORT_t {
     uint32_t CR[32];
     uint32_t GPCLR;                      // "Control Low Register"
@@ -124,6 +132,21 @@ typedef struct WDOG_t {
     uint16_t PRESC;
 } WDOG_t;
 
+
+typedef struct MPU_t {
+    uint32_t CESR;
+    uint32_t dummy1[3];
+    struct {
+        uint32_t address;
+        uint32_t detail;
+    } ERROR[5];
+    uint32_t dummy2[0xf2];
+    struct {
+        uint32_t SRTADDR, ENDADDR, RIGHTS, PID;
+    } RGD[12];
+    uint32_t dummy3[0xd0];
+    uint32_t AAC[12];
+} MPU_t;
 
 typedef struct USBFS_t {
     const reg8_t PERID;
@@ -179,9 +202,16 @@ typedef struct BDT_ep_t {
     BDT_item_t tx[2];
 } BDT_ep_t;
 
+
+#define MPU ((volatile MPU_t *) 0x4000D000)
+#define FMC ((volatile FMC_t *) 0x4001F000)
+
 #define PORTC_PCR ((volatile uint32_t *) 0x4004B000)
 
 #define WDOG  ((volatile WDOG_t *) 0x40052000)
+
+#define MCG ((volatile MCG_t *) 0x40064000)
+#define OSC ((volatile OSC_t *) 0x40065000)
 
 #define SIM   ((volatile SIM_t *) 0x40047000)
 #define USB0  ((volatile USBFS_t *) 0x40072000)
@@ -192,6 +222,10 @@ typedef struct BDT_ep_t {
 #define GPIOC ((volatile GPIO_t *) 0x400ff080)
 #define GPIOD ((volatile GPIO_t *) 0x400ff0c0)
 #define GPIOE ((volatile GPIO_t *) 0x400ff100)
+
+_Static_assert((unsigned) &MPU->ERROR[0].address == 0x4000d010, "MPU err");
+_Static_assert((unsigned) &MPU->RGD[0].SRTADDR == 0x4000d400, "MPU region");
+_Static_assert((unsigned) &MPU->AAC[0] == 0x4000d800, "MPU alt");
 
 _Static_assert((unsigned) PORTC_PCR == 0x4004b000, "PORTC pcr");
 _Static_assert((unsigned) &PORTC_PCR[5] == 0x4004b014, "PORTC pcr5");
