@@ -19,7 +19,6 @@ enum string_descs_t {
     sd_jumper,
 };
 
-
 static const uint16_t string_lang[2] = u"\x0304\x0409";
 static const uint16_t string_ralph[6] = u"\x030c""Ralph";
 static const uint16_t string_blink[6] = u"\x030c""Blink";
@@ -97,7 +96,6 @@ static const uint8_t config_descriptor[] = {
     0x2,                                // bulk
     64, 0,                              // packet size
     0,
-
 };
 _Static_assert (CONFIG_DESCRIPTOR_SIZE == sizeof (config_descriptor),
                 "config_descriptor size");
@@ -247,8 +245,8 @@ void go(void)
     // Release from suspend, weak pull downs.
     USB0->USBCTRL = 0;
 
-    // Unmask TOKDONE and RST and SOF
-    USB0->INTEN = 9 + 4;
+    // Unmask STALL, TOKDONE, RST.  4=SOF
+    USB0->INTEN = 0x80 + 9;
 
     // OTG 1ms int.
     // USB0->OTGICR = 0x40;
@@ -269,7 +267,7 @@ void go(void)
         /*     GPIOC->TOGGLE = 1 << 5; */
         /* } */
         int istat = USB0->ISTAT;
-        if (istat & 1) {
+        if (istat & 1) {                // RST
             bdt[0].rx[0].address = (void *) &setup;
             bdt[0].rx[0].flags = 0x400088;          // 8 bytes, USBFS own, DTS.
             bdt[0].rx[1].address = (void *) &setup;
@@ -284,7 +282,16 @@ void go(void)
             continue;
         }
 
-        if (istat & 4) {
+        if (istat & 128) {
+            if (istat & 8)
+                hang();                 // Unexpected.
+            if (~USB0->ENDPT[0].b & 2)
+                hang();
+            USB0->ENDPT[0].b &= ~2;
+            USB0->ISTAT = 128;
+        }
+
+        if (istat & 4) {                // SOF
             USB0->ISTAT = 4;
             static int toggle;
             if (++toggle == 100) {
@@ -332,16 +339,16 @@ void go(void)
 
         switch (setup0 & 0xffff) {
         case 0x0680:                    // Get descriptor.
-            switch (setup0 >> 24) {
-            case 1:
+            switch (setup0 >> 24) {     // Type
+            case 1:                     // Device descriptor.
                 response_data = device_descriptor;
                 response_length = DEVICE_DESCRIPTOR_SIZE;
                 break;
-            case 2:                         // Configuration.
+            case 2:                     // Configuration.
                 response_data = config_descriptor;
                 response_length = CONFIG_DESCRIPTOR_SIZE;
                 break;
-            case 3: {                        // String.
+            case 3: {                   // String.
                 unsigned index = (setup0 >> 16) & 255;
                 if (index < sizeof string_descriptors / 4) {
                     response_data = string_descriptors[index];
@@ -360,6 +367,7 @@ void go(void)
             break;
 
         case 0x0900:                // Set configuration.
+            // We only have one configuration so we just set it up by default.
             response_length = 0;
             break;
 
@@ -380,7 +388,8 @@ void go(void)
             // next_tx = !next_tx;
         }
         else {
-            hang();
+            // Issue a stall...
+            bdt[0].tx[next_tx].flags = 0xcc;
         }
 
         // Resume the EP, it pauses on setup.
