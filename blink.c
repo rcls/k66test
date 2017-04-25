@@ -114,10 +114,159 @@ static void hang(void)
 
 static bool set_address;
 static uint8_t address;
+static volatile uint32_t setup[16];
+static bool next_tx;
 
-void go(void)
+static void usb_interrupt_ep0(int done)
 {
-    asm volatile ("cpsid i\n" ::: "memory");
+    unsigned setup0 = setup[0];
+    unsigned setup1 = setup[1];
+
+    // Resume the BDT...
+    unsigned flags = STAT_TO_BDT(done)->flags;
+    STAT_TO_BDT(done)->flags = 0x4000c8;
+    STAT_TO_BDT(done ^ 4)->flags = 0x400088;
+
+    // If it's not a setup, ignore it.
+    if ((flags & 0x3c) != 0xd * 4) {
+        hang();
+        return;
+    }
+
+    const void * response_data = NULL;
+    int response_length = -1;
+
+    switch (setup0 & 0xffff) {
+    case 0x0680:                    // Get descriptor.
+        switch (setup0 >> 24) {     // Type
+        case 1:                     // Device descriptor.
+            response_data = device_descriptor;
+            response_length = DEVICE_DESCRIPTOR_SIZE;
+            break;
+        case 2:                     // Configuration.
+            response_data = config_descriptor;
+            response_length = CONFIG_DESCRIPTOR_SIZE;
+            break;
+        case 3: {                   // String.
+            unsigned index = (setup0 >> 16) & 255;
+            if (index < sizeof string_descriptors / 4) {
+                response_data = string_descriptors[index];
+                response_length = *string_descriptors[index] & 0xff;
+            }
+            break;
+        }
+        }
+        break;
+    case 0x0500:                        // Set address.
+        // GPIOC->SET = 1 << 5;
+        //USB0->ADDR = (setup0 >> 16) & 255;
+        address = (setup0 >> 16) & 255;
+        set_address = true;
+        response_length = 0;
+        break;
+
+    case 0x0900:                // Set configuration.
+        // We only have one configuration so we just set it up by default.
+        response_length = 0;
+        break;
+
+    case 0x0b01:                // Set interface
+        response_length = 0;
+        break;
+    }
+
+    // Don't stall for now...
+    if (response_length >= 0) {
+        //if (response_data) {
+        // This is a data1...
+        if ((setup1 >> 16) < response_length)
+            response_length = setup1 >> 16;
+
+        bdt[0].tx[next_tx].address = (void *) response_data;
+        bdt[0].tx[next_tx].flags = (response_length << 16) + 0xc8;
+        // next_tx = !next_tx;
+    }
+    else {
+        // Issue a stall...
+        bdt[0].tx[next_tx].flags = 0xcc;
+    }
+
+    // Resume the EP, it pauses on setup.
+    USB0->CTL &= ~0x20;
+}
+
+
+static void usb_interrupt1(int istat)
+{
+    GPIOC->SET = 1 << 5;
+    // int istat = USB0->ISTAT;
+    if (istat & 1) {                    // RST
+        bdt[0].rx[0].address = (void *) &setup;
+        bdt[0].rx[0].flags = 0x400088;  // 8 bytes, USBFS own, DTS.
+        bdt[0].rx[1].address = (void *) &setup;
+        bdt[0].rx[1].flags = 0x4000c8;  // 8 bytes, USBFS own, DTS.
+
+        USB0->ENDPT[0].b = 0x0d;        // Endpoint is control.
+        USB0->ADDR = 0;
+        USB0->CTL = 3;                  // Reset odd/even.
+        USB0->CTL = 1;                  // Enable...
+        USB0->ISTAT = istat;
+        next_tx = 0;
+        return;
+    }
+
+    if (istat & 128) {
+        if (istat & 8)
+            hang();                     // Unexpected.
+        if (~USB0->ENDPT[0].b & 2)
+            hang();
+        USB0->ENDPT[0].b &= ~2;
+        USB0->ISTAT = 128;
+    }
+
+    if (istat & 4) {                    // SOF
+        USB0->ISTAT = 4;
+        static int toggle;
+        if (++toggle == 100) {
+            toggle = 0;
+            //GPIOC->TOGGLE = 1 << 5;
+        }
+    }
+
+    if ((istat & 8) == 0)
+        return;
+
+    int done = USB0->STAT;
+    USB0->ISTAT = 8;
+
+    // If it's ep 0 TX, update the next_tx flag...
+    if ((done & ~4) == 8) {
+        // GPIOC->SET = 1 << 5;
+        next_tx = !(done & 4);
+        if (set_address)
+            USB0->ADDR = address;
+        set_address = false;
+        return;
+    }
+
+    // EP0 RX...
+    if ((done & ~4) == 0)
+        usb_interrupt_ep0(done);
+}
+
+static void usb_interrupt(void)
+{
+    while (1) {
+        int istat = USB0->ISTAT;
+        if (!istat)
+            break;
+        usb_interrupt1(istat);
+    }
+}
+
+static void __attribute__((noreturn)) go(void)
+{
+    asm volatile ("cpsie i\n" ::: "memory");
 
     WDOG->UNLOCK = 0xc520;
     WDOG->UNLOCK = 0xd928;
@@ -224,7 +373,6 @@ void go(void)
     // Set up endpoint zero rx...
     // Disable DTS on these, that way the same BDT can process the SETUP token
     // and the OUT token used for a control ACK.
-    static volatile uint32_t setup[16];
     bdt[0].rx[0].address = (void *) &setup;
     bdt[0].rx[0].flags = 0x400088;          // 8 bytes, USBFS own, DTS.
     bdt[0].rx[1].address = (void *) &setup;
@@ -255,152 +403,19 @@ void go(void)
     USB0->CTL = 3;                      // Reset odd/even.
     USB0->CTL = 1;                      // Enable...
 
-    bool next_tx = 0;
+    // Enable the USB interrupt...
+    NVIC->ISER[i_USBFS >> 5] = 1 << (i_USBFS & 31);
 
     while (1) {
-        // Just in case it stalls...
-        //USB0->ENDPT[0].b = 0x0d;              // Endpoint is control.
-
-        //GPIOC->OUT = (USB0->FRMNUMH & 1) ? 1 << 5 : 0;
-        /* if (++toggle == 1048576) { */
-        /*     toggle = 0; */
-        /*     GPIOC->TOGGLE = 1 << 5; */
-        /* } */
-        int istat = USB0->ISTAT;
-        if (istat & 1) {                // RST
-            bdt[0].rx[0].address = (void *) &setup;
-            bdt[0].rx[0].flags = 0x400088;          // 8 bytes, USBFS own, DTS.
-            bdt[0].rx[1].address = (void *) &setup;
-            bdt[0].rx[1].flags = 0x4000c8;          // 8 bytes, USBFS own, DTS.
-
-            USB0->ENDPT[0].b = 0x0d;              // Endpoint is control.
-            USB0->ADDR = 0;
-            USB0->CTL = 3;                      // Reset odd/even.
-            USB0->CTL = 1;                      // Enable...
-            USB0->ISTAT = istat;
-            next_tx = 0;
-            continue;
-        }
-
-        if (istat & 128) {
-            if (istat & 8)
-                hang();                 // Unexpected.
-            if (~USB0->ENDPT[0].b & 2)
-                hang();
-            USB0->ENDPT[0].b &= ~2;
-            USB0->ISTAT = 128;
-        }
-
-        if (istat & 4) {                // SOF
-            USB0->ISTAT = 4;
-            static int toggle;
-            if (++toggle == 100) {
-                toggle = 0;
-                //GPIOC->TOGGLE = 1 << 5;
-            }
-        }
-
-        if ((istat & 8) == 0)
-            continue;
-
-        int done = USB0->STAT;
-        USB0->ISTAT = 8;
-
-        // If it's ep 0 TX, update the next_tx flag...
-        if ((done & ~4) == 8) {
-            // GPIOC->SET = 1 << 5;
-            next_tx = !(done & 4);
-            if (set_address)
-                USB0->ADDR = address;
-            set_address = false;
-            continue;
-        }
-
-        // If it's not ep 0 RX, don't care...
-        if ((done & ~4) != 0)
-            continue;
-
-        unsigned setup0 = setup[0];
-        unsigned setup1 = setup[1];
-
-        // Resume the BDT...
-        unsigned flags = STAT_TO_BDT(done)->flags;
-        STAT_TO_BDT(done)->flags = 0x4000c8;
-        STAT_TO_BDT(done ^ 4)->flags = 0x400088;
-
-        // If it's not a setup, ignore it.
-        if ((flags & 0x3c) != 0xd * 4) {
-            hang();
-            continue;
-        }
-
-        const void * response_data = NULL;
-        int response_length = -1;
-
-        switch (setup0 & 0xffff) {
-        case 0x0680:                    // Get descriptor.
-            switch (setup0 >> 24) {     // Type
-            case 1:                     // Device descriptor.
-                response_data = device_descriptor;
-                response_length = DEVICE_DESCRIPTOR_SIZE;
-                break;
-            case 2:                     // Configuration.
-                response_data = config_descriptor;
-                response_length = CONFIG_DESCRIPTOR_SIZE;
-                break;
-            case 3: {                   // String.
-                unsigned index = (setup0 >> 16) & 255;
-                if (index < sizeof string_descriptors / 4) {
-                    response_data = string_descriptors[index];
-                    response_length = *string_descriptors[index] & 0xff;
-                }
-                break;
-            }
-            }
-            break;
-        case 0x0500:                        // Set address.
-            // GPIOC->SET = 1 << 5;
-            //USB0->ADDR = (setup0 >> 16) & 255;
-            address = (setup0 >> 16) & 255;
-            set_address = true;
-            response_length = 0;
-            break;
-
-        case 0x0900:                // Set configuration.
-            // We only have one configuration so we just set it up by default.
-            response_length = 0;
-            break;
-
-        case 0x0b01:                // Set interface
-            response_length = 0;
-            break;
-        }
-
-        // Don't stall for now...
-        if (response_length >= 0) {
-        //if (response_data) {
-            // This is a data1...
-            if ((setup1 >> 16) < response_length)
-                response_length = setup1 >> 16;
-
-            bdt[0].tx[next_tx].address = (void *) response_data;
-            bdt[0].tx[next_tx].flags = (response_length << 16) + 0xc8;
-            // next_tx = !next_tx;
-        }
-        else {
-            // Issue a stall...
-            bdt[0].tx[next_tx].flags = 0xcc;
-        }
-
-        // Resume the EP, it pauses on setup.
-        USB0->CTL &= ~0x20;
+        // usb_interrupt();
+        asm volatile ("wfi\n" ::: "memory");
     }
 }
 
-void * start[256] __attribute__ ((section (".start"), externally_visible));
-void * start[256] = {
-    [0] = (void*) 0x1ffffff0,
-    [1] = go,
+
+VECTORS_t __attribute__ ((section (".start"), externally_visible)) start = {
+    { (void*) 0x1ffffff0, go },
+    { [i_USBFS] = usb_interrupt },
 };
 
 uint32_t flash_config[4] __attribute__ ((section (".fconfig"), externally_visible));

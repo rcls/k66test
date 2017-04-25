@@ -203,6 +203,31 @@ typedef struct BDT_ep_t {
 } BDT_ep_t;
 
 
+typedef struct NVIC_t {
+    uint32_t dummy;
+    uint32_t ICTR;
+    uint32_t dummy0[62];
+    uint32_t ISER[32];                  // Set enable.
+    uint32_t ICER[32];                  // Clear enable.
+    uint32_t ISPR[32];                  // Set pending.
+    uint32_t ICPR[32];                  // Clear pending.
+    uint32_t IABR[32];                  // Active bit register.
+    uint32_t dummy1[32];
+    // Interrupt priority registers.
+    union {
+        uint32_t IPRw[256];
+        uint8_t IPR[1024];
+    };
+    uint32_t dummy2[7 * 64];
+    uint32_t STIR;                      // Software Triggered Interrupt.
+} NVIC_t;
+
+
+typedef struct VECTORS_t {
+    void * exceptions[16];
+    void * interrupts[256 - 16];
+} VECTORS_t;
+
 #define MPU ((volatile MPU_t *) 0x4000D000)
 #define FMC ((volatile FMC_t *) 0x4001F000)
 
@@ -223,6 +248,8 @@ typedef struct BDT_ep_t {
 #define GPIOD ((volatile GPIO_t *) 0x400ff0c0)
 #define GPIOE ((volatile GPIO_t *) 0x400ff100)
 
+#define NVIC ((volatile NVIC_t *) 0xE000E000)
+
 _Static_assert((unsigned) &MPU->ERROR[0].address == 0x4000d010, "MPU err");
 _Static_assert((unsigned) &MPU->RGD[0].SRTADDR == 0x4000d400, "MPU region");
 _Static_assert((unsigned) &MPU->AAC[0] == 0x4000d800, "MPU alt");
@@ -238,5 +265,98 @@ _Static_assert((unsigned) &SIM->OPT2 == 0x40048004, "SIM opt2");
 _Static_assert((unsigned) &SIM->CLKDIV2 == 0x40048048, "SIM clkdiv");
 _Static_assert((unsigned) &SIM->CGC4 == 0x40048034, "SIM cgc4");
 
+_Static_assert((unsigned) &NVIC->ISER == 0xe000e100, "NVIC ISER");
+_Static_assert((unsigned) &NVIC->IABR == 0xe000e300, "NVIC IABR");
+_Static_assert((unsigned) &NVIC->IPR  == 0xe000e400, "NVIC IPR");
+_Static_assert((unsigned) &NVIC->STIR == 0xe000ef00, "NVIC STIR");
+
+enum {
+    i_DMA = 0,
+    i_DMA_error = 16,
+    i_MCM,
+    i_FLASH_complete,
+    i_FLASH_collide,
+    i_low_voltage,
+    i_LLWU,
+    i_WDOG_EWM,
+    i_RNG,
+    i_I2C0,
+    i_I2C1,
+    i_SPI0,
+    i_SPI1,
+    i_I2S0_tx,
+    i_I2S0_rx,
+    i_30,
+    i_UART0,
+    i_UART0_error,
+    i_UART1,
+    i_UART1_error,
+    i_UART2,
+    i_UART2_error,
+    i_UART3,
+    i_UART3_error,
+    i_ADC0,
+    i_CMP0,
+    i_CMP1,
+    i_FTM0,
+    i_FTM1,
+    i_FTM2,
+    i_CMT,
+    i_RTC_alarm,
+    i_RTC_seconds,
+    i_PIT0,
+    i_PIT1,
+    i_PIT2,
+    i_PIT3,
+    i_PDB,
+    i_USBFS,
+    i_USBFS_DCD,
+    i_55,
+    i_DAC0,
+    i_MCG,
+    i_LPT,
+    i_PORTA,
+    i_PORTB,
+    i_PORTC,
+    i_PORTD,
+    i_PORTE,
+    i_software,
+    i_SPI2,
+    i_UART4,
+    i_UART4_error,
+    i_68,
+    i_69,
+    i_CMP2,
+    i_FTM3,
+    i_DAC1,
+    i_ADC1,
+    i_I2C2,
+    i_CAN0_MSG,
+    i_CAN0_bus_off,
+    i_CAN0_error,
+    i_CAN0_tx_warn,
+    i_CAN0_rx_warn,
+    i_CAN0_wake_up,
+    i_ETH_timer,
+    i_ETH_tx,
+    i_ETH_rx,
+    i_ETH_error,
+    i_LPUART0,
+    i_TSI0,
+    i_TPM1,
+    i_TPM2,
+    i_USBHS,
+    i_I2C3,
+    i_CMP3,
+    i_USBHS_OTG,
+    i_CAN1_MSG,
+    i_CAN1_bus_off,
+    i_CAN1_error,
+    i_CAN1_tx_warn,
+    i_CAN1_rx_warn,
+    i_CAN1_wake_up,
+};
+
+_Static_assert(i_USBFS == 53, "i USBFS");
 
 #endif
