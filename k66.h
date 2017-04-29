@@ -3,6 +3,15 @@
 
 #include <stdint.h>
 
+#define interrupt_disable() asm volatile ("cpsid i\n" ::: "memory");
+#define interrupt_enable() asm volatile ("cpsie i\n" ::: "memory");
+#define interrupt_wait() asm volatile ("wfi\n");
+#define interrupt_wait_go() do {                \
+        interrupt_wait();                       \
+        interrupt_enable();                     \
+        interrupt_disable();                    \
+    } while (0)
+
 typedef unsigned char __attribute__((aligned(4))) reg8_t;
 typedef union reg8_u {
     unsigned char b;
@@ -257,6 +266,9 @@ _Static_assert((unsigned) &MPU->AAC[0] == 0x4000d800, "MPU alt");
 _Static_assert((unsigned) PORTC_PCR == 0x4004b000, "PORTC pcr");
 _Static_assert((unsigned) &PORTC_PCR[5] == 0x4004b014, "PORTC pcr5");
 
+_Static_assert(&MCG->C6 == (void *) 0x40064005, "MCG C6");
+_Static_assert(&MCG->S == (void *) 0x40064006, "MCG S");
+
 _Static_assert((unsigned) &USB0->ISTAT == 0x40072080, "USB0 istat");
 _Static_assert((unsigned) &USB0->ENDPT[0] == 0x400720c0, "USB0 ep0");
 _Static_assert((unsigned) &USB0->USBCTRL == 0x40072100, "USB0 usbctrl");
@@ -271,7 +283,7 @@ _Static_assert((unsigned) &NVIC->IPR  == 0xe000e400, "NVIC IPR");
 _Static_assert((unsigned) &NVIC->STIR == 0xe000ef00, "NVIC STIR");
 
 enum {
-    i_DMA = 0,
+    i_DMA = 0,                          // Separate per channel.
     i_DMA_error = 16,
     i_MCM,
     i_FLASH_complete,
