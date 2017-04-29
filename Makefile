@@ -1,27 +1,27 @@
 
-all: blink.hex
+all: echo.hex
 
 .PHONY: all clean
 .SECONDARY:
 
 clean:
-	-rm -f *.elf *.bin *.flasher *.boot *.o *.a *.s .deps/*.d
+	-rm -f *.elf *.bin *.o .*.d
 
 CC=arm-linux-gnu-gcc
 LD=$(CC)
 LDFLAGS=-nostdlib -Wl,--build-id=none -fwhole-program
 OBJCOPY=arm-linux-gnu-objcopy
 CFLAGS=-Os -flto -ffreestanding \
-	-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -MMD -MP -MF.deps/$@.d \
+	-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -MMD -MP -MF.$@.d \
 	-fno-common -Wall -Werror
 UTILS=../utils
 
--include .deps/*.d
+-include .*.d
 
 # Kill this rule.
 %: %.c
 
-blink.elf: blink.ld blink.o
+echo.elf: echo.ld echo.o
 	$(LINK.c) -T $^ $(LOADLIBES) $(LDLIBS) -o $@
 
 %.bin: %.elf
@@ -37,6 +37,6 @@ blink.elf: blink.ld blink.o
 %: %.c
 %: %.o
 
-.PHONY: blinkp
-blinkp: blink.hex
-	sudo /home/mirror/teensy_loader_cli/teensy_loader_cli --mcu mk66fx1m0 -w blink.hex
+.PHONY: echop
+echop: echo.hex
+	sudo /home/mirror/teensy_loader_cli/teensy_loader_cli --mcu mk66fx1m0 -w echo.hex
