@@ -125,6 +125,7 @@ static struct {
 } monkey_recv_pos[2];
 
 static uint8_t monkey_recv[128];
+static bool monkey_rx_next;             // Next to schedule.
 
 #define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
 
@@ -138,17 +139,15 @@ static void monkey_tx_schedule(void)
     if (len > 64)
         hang();                         // Should never happen.
 
-    // This appears to be safe; if the flag is reset after we inspect it, an
-    // interrupt is scheduled when it is cleared & interrupts are synch here.
     interrupt_disable();
     while (bdt[1].tx[monkey_tx_odd].flags & 0x80)
-        interrupt_wait_go();            // Wait for something to happen...
-    interrupt_enable();
+        interrupt_wait_go();
 
     // For the monkey we keep even/odd sync'd with DATA0/DATA1.
     bdt[1].tx[monkey_tx_odd].address = monkey_tx_next;
     bdt[1].tx[monkey_tx_odd].flags = (len << 16) + 0x88 + (monkey_tx_odd << 6);
     monkey_tx_odd = !monkey_tx_odd;
+    interrupt_enable();
 
     if (monkey_tx_write - monkey_tx >= 128)
         monkey_tx_write = monkey_tx;
@@ -161,21 +160,39 @@ static void monkey_start(void)
 {
     GPIOC->SET = 1 << 5;
 
-    // Stop the TX endpoint...
+    // Stop the TX endpoint...  Any old buffered data is gone gone gone.
     bdt[1].tx[0].flags = 0;
     bdt[1].tx[1].flags = 0;
     monkey_tx_odd = false;
 
-    // Dump any RX data and schedule the RX.
-    bdt[1].rx[0].address = monkey_recv;
-    bdt[1].rx[0].flags = 0x400088;
-    bdt[1].rx[1].address = monkey_recv + 64;
-    bdt[1].rx[1].flags = 0x4000c8;
+    // Work out which way round to schedule the buffers...
+    uintptr_t last = (uintptr_t) monkey_recv_pos[1].next;
+    if (last == 0)
+        last = (uintptr_t) monkey_recv_pos[0].next;
+    if (last < (uintptr_t) monkey_recv + 64) {
+        bdt[1].rx[0].address = monkey_recv + 64;
+        bdt[1].rx[1].address = monkey_recv;
+    }
+    else {
+        bdt[1].rx[0].address = monkey_recv;
+        bdt[1].rx[1].address = monkey_recv + 64;
+    }
 
-    monkey_recv_pos[0].next = NULL;
-    monkey_recv_pos[0].end  = NULL;
-    monkey_recv_pos[1].next = NULL;
-    monkey_recv_pos[1].end  = NULL;
+    // Now work out what to schedule...
+    if (monkey_recv_pos[1].next == NULL)
+        bdt[1].rx[0].flags = 0x400088;
+    else
+        bdt[1].rx[0].flags = 0;
+
+    if (monkey_recv_pos[0].next == NULL)
+        bdt[1].rx[1].flags = 0x4000c8;
+    else
+        bdt[1].rx[1].flags = 0;
+
+    if (monkey_recv_pos[0].next != NULL && monkey_recv_pos[1].next == NULL)
+        monkey_rx_next = 0;
+    else
+        monkey_rx_next = 1;
 
     // Start the EP.
     USB0->ENDPT[1].b = 0x1d;
@@ -192,9 +209,7 @@ void putchar(char c)
 
 int getchar(void)
 {
-    // FIXME - this races with a reset of the monkey pointers from a USB config
-    // or USB reset.
-    uint8_t * n = ACCESS_ONCE(monkey_recv_pos->next);
+    uint8_t * n = monkey_recv_pos->next;
     if (n == NULL) {
         monkey_tx_schedule();           // Flush...
         interrupt_disable();
@@ -213,12 +228,11 @@ int getchar(void)
     monkey_recv_pos[0] = monkey_recv_pos[1];
     monkey_recv_pos[1].next = NULL;
     monkey_recv_pos[1].end = NULL;
-    interrupt_enable();
+
     // Reschedule the end-point...
-    if (n <= monkey_recv + 64)
-        bdt[1].rx[0].flags = 0x400088;
-    else
-        bdt[1].rx[1].flags = 0x4000c8;
+    bdt[1].rx[monkey_rx_next].flags = 0x400088 + (monkey_rx_next << 6);
+    monkey_rx_next = !monkey_rx_next;
+    interrupt_enable();
 
     return r;
 }

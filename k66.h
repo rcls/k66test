@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define interrupt_disable() asm volatile ("cpsid i\n" ::: "memory");
-#define interrupt_enable() asm volatile ("cpsie i\n" ::: "memory");
+#define interrupt_disable() asm volatile("cpsid i\n" ::: "memory");
+#define interrupt_enable() asm volatile("cpsie i\n" ::: "memory");
 #define interrupt_wait() asm volatile ("wfi\n");
 #define interrupt_wait_go() do {                \
         interrupt_wait();                       \
