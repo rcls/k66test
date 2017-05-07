@@ -43,16 +43,15 @@ reading when you want to get stuff done.
 
 * Ditto the flash memory controller (FMC).  God knows why they thought
   flash needs its own (non-standard) MPU.  (My guess is some
-  corpomoron customer code was so full of security holes that you
-  could unexpectedly dump out their supa-sekrit IP from flash and
-  point fingers and laugh at said corpomoron, triggering
-  self-important and hubristic lack of sense of humour).
+  corpomoron customer code couldn't fix their security holes).
 
 USBHS
 -----
 
 The USBHS documentation is lacking, esp. for device mode.  If you
 know the USB protocol, then the hardware is actually quite sensible.
+
+* Despite being word aligned the registers require byte access.
 
 * You need to manage the data-toggle yourself, which is separate from the
   BDT odd/even.  (Although for a bulk endpoint you can keep them in synch).
@@ -61,8 +60,8 @@ know the USB protocol, then the hardware is actually quite sensible.
 
 * Set-up IN replies always start with DATA1.  Always send an IN in
   response to a set-up (unless you STALL), zero-length of there is
-  no data.  Unlike some other USB device implementations, no need to
-  explicity handle a zero-length OUT acknowledgement.
+  no data.  Unlike some other USB device implementations, it seems there is
+  no need to explicitly handle a zero-length OUT acknowledgement.
 
 * Data toggles reset on a set-up set-config.
 

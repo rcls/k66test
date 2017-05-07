@@ -18,6 +18,11 @@ typedef union reg8_u {
     uint32_t u32;
 } reg8_u;
 
+typedef union SystemRegisterFile_t {
+    uint8_t b[32];
+    uint32_t w[32];
+} SystemRegisterFile_t;
+
 typedef struct MCG_t {
     uint8_t C1;
     uint8_t C2;
@@ -48,13 +53,6 @@ typedef struct OSC_t {
     uint8_t dummy1;
     uint8_t DIV;
 } OSC_t;
-
-typedef struct SMC_t {
-    uint8_t PMPROT;
-    uint8_t PMCTRL;
-    uint8_t STOPCTRL;
-    uint8_t PMSTAT;
-} SMC_t;
 
 typedef struct SIM_t {
     uint32_t OPT1;
@@ -211,6 +209,49 @@ typedef struct BDT_ep_t {
     BDT_item_t tx[2];
 } BDT_ep_t;
 
+typedef struct SMC_t {
+    uint8_t PMPROT;
+    uint8_t PMCTRL;
+    uint8_t STOPCTRL;
+    uint8_t PMSTAT;
+} SMC_t;
+
+typedef struct RCM_t {
+    uint8_t SRS[2];
+    uint8_t dummy[2];
+    uint8_t RPFC;
+    uint8_t RPFW;
+    uint8_t dummy6;
+    uint8_t MR;
+    uint8_t SSRS[2];
+} RCM_t;
+
+typedef struct SCB_t {
+    const unsigned CPUID;
+    unsigned ICSR;
+    void *   VTOR;
+    unsigned AIRCR;
+    unsigned SCR;
+    unsigned CCR;
+    unsigned SHPR1;
+    unsigned SHPR2;
+    unsigned SHPR3;
+    unsigned SHCSR;
+    unsigned CFSR;
+    unsigned HFSR;
+    unsigned DFSR;
+    unsigned MMFAR;
+    void *   BFAR;
+    void *   AFSR;
+    const unsigned ID_PFR0[2];
+    const unsigned ID_DFR0;
+    const unsigned ID_AFR0;
+    const unsigned ID_MMFR[4];
+    const unsigned ID_ISAR[5];
+    unsigned dummy5[5];
+    unsigned CPACR;
+} SCB_t;
+
 
 typedef struct NVIC_t {
     uint32_t dummy;
@@ -240,16 +281,18 @@ typedef struct VECTORS_t {
 #define MPU ((volatile MPU_t *) 0x4000D000)
 #define FMC ((volatile FMC_t *) 0x4001F000)
 
+#define SystemRegisterFile ((SystemRegisterFile_t *) 0x40041000)
+#define SIM   ((volatile SIM_t *)   0x40047000)
 #define PORTC_PCR ((volatile uint32_t *) 0x4004B000)
 
 #define WDOG  ((volatile WDOG_t *) 0x40052000)
 
-#define MCG ((volatile MCG_t *) 0x40064000)
-#define OSC ((volatile OSC_t *) 0x40065000)
+#define MCG   ((volatile MCG_t *) 0x40064000)
+#define OSC   ((volatile OSC_t *) 0x40065000)
 
-#define SIM   ((volatile SIM_t *) 0x40047000)
 #define USB0  ((volatile USBFS_t *) 0x40072000)
-#define SMC   ((volatile SMC_t *) 0x4007e000)
+#define SMC   ((volatile SMC_t *)   0x4007e000)
+#define RCM   ((volatile RCM_t *)   0x4007f000)
 
 #define GPIOA ((volatile GPIO_t *) 0x400ff000)
 #define GPIOB ((volatile GPIO_t *) 0x400ff040)
@@ -281,6 +324,10 @@ _Static_assert((unsigned) &NVIC->ISER == 0xe000e100, "NVIC ISER");
 _Static_assert((unsigned) &NVIC->IABR == 0xe000e300, "NVIC IABR");
 _Static_assert((unsigned) &NVIC->IPR  == 0xe000e400, "NVIC IPR");
 _Static_assert((unsigned) &NVIC->STIR == 0xe000ef00, "NVIC STIR");
+
+#define SCB ((volatile SCB_t *) 0xe000ed00)
+_Static_assert((unsigned) &SCB->MMFAR == 0xe000ed34, "SCB MMFAR");
+_Static_assert((unsigned) &SCB->CPACR == 0xe000ed88, "SCB CPACR");
 
 enum {
     i_DMA = 0,                          // Separate per channel.

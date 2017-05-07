@@ -1,5 +1,5 @@
 
-all: echo.hex
+all: monitor.hex blink.bin
 
 .PHONY: all clean
 .SECONDARY:
@@ -21,7 +21,10 @@ UTILS=../utils
 # Kill this rule.
 %: %.c
 
-echo.elf: echo.ld echo.o
+monitor.elf: rom0.ld monitor.o
+blink.elf: sramH.ld blink.o
+
+%.elf:
 	$(LINK.c) -T $^ $(LOADLIBES) $(LDLIBS) -o $@
 
 %.bin: %.elf
@@ -37,6 +40,6 @@ echo.elf: echo.ld echo.o
 %: %.c
 %: %.o
 
-.PHONY: echop
-echop: echo.hex
-	sudo /home/mirror/teensy_loader_cli/teensy_loader_cli --mcu mk66fx1m0 -w echo.hex
+.PHONY: monitorp
+monitorp: monitor.hex
+	sudo /home/mirror/teensy_loader_cli/teensy_loader_cli --mcu mk66fx1m0 -w monitor.hex

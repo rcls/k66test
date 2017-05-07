@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+extern void monitor(void);
+
 volatile BDT_ep_t __attribute__((aligned(512))) bdt[16];
 
 #define STAT_TO_BDT(n) ((volatile BDT_item_t *) ((char *) bdt + 2 * (n)))
@@ -130,24 +132,19 @@ static bool monkey_rx_next;             // Next to schedule.
 #define ACCESS_ONCE(x) (*(volatile typeof(x) *)&(x))
 
 
+// Should be called with interrupts disabled.
 static void monkey_tx_schedule(void)
 {
-    int len = monkey_tx_write - monkey_tx_next;
-    if (len <= 0)
-        return;                         // Nothing to do.
-
-    if (len > 64)
-        hang();                         // Should never happen.
-
-    interrupt_disable();
     while (bdt[1].tx[monkey_tx_odd].flags & 0x80)
         interrupt_wait_go();
 
     // For the monkey we keep even/odd sync'd with DATA0/DATA1.
     bdt[1].tx[monkey_tx_odd].address = monkey_tx_next;
+    int len = monkey_tx_write - monkey_tx_next;
+    if (len > 64)
+        hang();                         // Should never happen.
     bdt[1].tx[monkey_tx_odd].flags = (len << 16) + 0x88 + (monkey_tx_odd << 6);
     monkey_tx_odd = !monkey_tx_odd;
-    interrupt_enable();
 
     if (monkey_tx_write - monkey_tx >= 128)
         monkey_tx_write = monkey_tx;
@@ -202,17 +199,35 @@ static void monkey_start(void)
 void putchar(char c)
 {
     *monkey_tx_write++ = c;
-    if (monkey_tx_write - monkey_tx_next >= 64)
+    if (monkey_tx_write - monkey_tx_next >= 64) {
+        interrupt_disable();
         monkey_tx_schedule();
+        interrupt_enable();
+    }
 }
 
+static int ungetbyte;
+
+static void ungetchar(int byte)
+{
+    ungetbyte = byte;
+}
 
 int getchar(void)
 {
+    if (ungetbyte >= 0) {
+        int r = ungetbyte;
+        ungetbyte = -1;
+        return r;
+    }
+
+    // FIXME - fold the two update cases...  Then we should leave ourselves
+    // with always a valid buffer for ungetc...
     uint8_t * n = monkey_recv_pos->next;
     if (n == NULL) {
-        monkey_tx_schedule();           // Flush...
         interrupt_disable();
+        if (monkey_tx_write != monkey_tx_next)
+            monkey_tx_schedule();       // Flush...
         while (monkey_recv_pos->next == NULL)
             interrupt_wait_go();
         n = monkey_recv_pos->next;
@@ -324,11 +339,11 @@ static void usb_ep0_rx(int done)
         // We only have one configuration so we just set it up by default.
         // FIXME - this resets data toggle?  FIXME - what happens to already
         // sechduled buffers?
-        /* USB0->CTL = 3; */
-        /* USB0->CTL = 1; */
+        USB0->CTL = 3;
+        USB0->CTL = 1;
         monkey_start();
         response_length = 0;
-        /* next_ep0_tx = 0; */
+        next_ep0_tx = 0;
         break;
 
     case 0x0b01:         // Set interface.
@@ -406,9 +421,203 @@ static void usb_interrupt(void)
 }
 
 
+static void puts(const char * s)
+{
+    for (; *s; ++s)
+        putchar(*s);
+}
+
+
+static void puthex(unsigned n, unsigned len)
+{
+    unsigned l = len * 4;
+    do {
+        l -= 4;
+        unsigned nibble = (n >> l) & 15;
+        if (nibble >= 10)
+            nibble += 'a' - '0' - 10;
+        putchar(nibble + '0');
+    }
+    while (l);
+}
+
+
+static unsigned getchar_skip_space(void)
+{
+    unsigned b;
+    do
+        b = getchar();
+    while (b == ' ');
+    return b;
+}
+
+
+static unsigned get_hex(unsigned max)
+{
+    unsigned result = 0;
+    unsigned d = getchar_skip_space();
+    for (unsigned i = 0; i < max; ++i) {
+        unsigned c = d;
+        if (c >= 'a')
+            c -= 32;                    // Upper case.
+        c -= '0';
+        if (c >= 10) {
+            c -= 'A' - '0' - 10;
+            if (c < 10 || c > 15)
+                break;
+        }
+        result = result * 16 + c;
+        d = getchar();
+    }
+    ungetchar(d);
+    return result;
+}
+
+
+static void _Noreturn command_abort(const char * s)
+{
+    puts(s);
+    unsigned sp = 0x1ffffff0;
+    unsigned m = (unsigned) monitor;
+    asm volatile ("mov sp,%0\n" "bx %1\n" :: "r" (sp), "r" (m));
+    __builtin_unreachable();
+}
+
+
+static void _Noreturn command_error(const char * s)
+{
+    while (getchar() != '\n');
+    command_abort(s);
+}
+
+
+static void command_end()
+{
+    if (getchar_skip_space() != '\n')
+        command_error("? Crap on end of line.\n");
+}
+
+
+static void * get_address(void)
+{
+    void * r = (void *) get_hex(8);
+    command_end();
+    return r;
+}
+
+
+static void command_go(void)
+{
+    void * v = get_address();
+    puts("Go\n");
+
+    interrupt_disable();
+    if (monkey_tx_write != monkey_tx_next)
+        monkey_tx_schedule();       // Flush...
+
+    while (bdt[1].tx[0].flags & 0x80 || bdt[1].tx[1].flags & 0x80)
+        interrupt_wait_go();
+    interrupt_enable();
+
+    // Now reset...
+    SystemRegisterFile->w[0] = (unsigned) v;
+
+    while (true)
+        SCB->AIRCR = 0x05FA0004;
+}
+
+
+static void command_ping(void)
+{
+    putchar('P');
+    unsigned char c;
+    do {
+        c = getchar();
+        putchar(c);
+    }
+    while (c != '\n');
+}
+
+
+static void command_read(void)
+{
+    uint8_t * address = get_address();
+
+    puthex((unsigned) address, 8);
+    char sep = ':';
+    for (int i = 0; i != 16; ++i) {
+        putchar(sep);
+        puthex(address[i], 2);
+        sep = ' ';
+    }
+    putchar('\n');
+}
+
+
+static void command_write(void)
+{
+    uint8_t * address = (uint8_t *) get_hex(8);
+    uint8_t bytes[16];
+    unsigned n = 0;
+    for (; n != sizeof bytes; ++n) {
+        int c = getchar_skip_space();
+        if (c == '\n')
+            goto do_write;
+        ungetchar(c);
+        bytes[n] = get_hex(2);
+    }
+
+    command_end();
+
+do_write:
+    // Memory.
+    for (unsigned i = 0; i < n; ++i)
+        address[i] = bytes[i];
+}
+
+
+static void command(void)
+{
+    unsigned c = getchar_skip_space();
+    if (c == 'R') {
+        command_read();
+        return;
+    }
+    else if (c == 'P') {
+        command_ping();
+        return;
+    }
+    else if (c == 'W')
+        command_write();
+    else if (c == 'G')
+        command_go();
+    else if (c == '\n')
+        return;
+    else
+        command_error("Unknown command\n");
+
+    putchar(c);
+    putchar('\n');
+}
+
+
+void _Noreturn monitor(void)
+{
+    while (true)
+        command();
+}
+
+
 static void go(void)
 {
-    // asm volatile ("cpsie i\n" ::: "memory");
+    // If SystemRegisterFile indicates a boot target, jump to it...
+    if (SystemRegisterFile->w[0]) {
+        uint32_t * vt = (uint32_t *) SystemRegisterFile->w[0];
+        SystemRegisterFile->w[0] = SystemRegisterFile->w[1];
+        SCB->VTOR = vt;
+        asm volatile ("mov sp,%0\n" "bx %1\n" :: "r" (vt[0]), "r" (vt[1]));
+        __builtin_unreachable();
+    }
 
     // K66 gotcha: it comes out of reset with the WDOG enabled.  Turn it off
     // now.
@@ -528,11 +737,9 @@ static void go(void)
     // Enable the USB interrupt...
     NVIC->ISER[i_USBFS >> 5] = 1 << (i_USBFS & 31);
 
-    while (1) {
-        //asm volatile ("wfi\n" ::: "memory");
-        putchar(getchar());
-        // flush();
-    }
+    ungetchar(-1);
+
+    monitor();
 }
 
 
